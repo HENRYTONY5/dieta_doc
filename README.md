@@ -67,41 +67,201 @@ hola_doc/
 
 ## 🚀 Instalación y Configuración
 
-### Requisitos Previos
-- Node.js 18+ 
-- npm o yarn
-- Expo CLI
-- Android Studio (para Android) o Xcode (para iOS)
+### 📦 Requisitos Previos - Instalación Completa
 
-### Pasos de Instalación
+#### 1. **Node.js y npm**
+   - **Versión requerida**: Node.js 18.0.0 o superior
+   - **Descargar**: https://nodejs.org/
+   - **Verificar instalación**:
+     ```bash
+     node --version    # Debe ser v18.0.0 o superior
+     npm --version     # Debe ser 9.0.0 o superior
+     ```
 
-1. **Clonar el repositorio**
+#### 2. **Git**
+   - **Sistema Windows**: https://git-scm.com/download/win
+   - **Verificar**:
+     ```bash
+     git --version
+     ```
+
+#### 3. **Expo CLI**
    ```bash
-   git clone https://github.com/HENRYTONY5/dieta_doc.git
-   cd dieta_doc
+   npm install -g expo-cli
+   expo --version
    ```
 
-2. **Instalar dependencias**
-   ```bash
-   npm install
-   ```
+#### 4. **Para Android (Opcional pero Recomendado)**
+   - **Android Studio**: https://developer.android.com/studio
+   - **Java Development Kit (JDK) 11+**: Incluido en Android Studio
+   - **Android SDK**: API level 31 o superior
+   - **Variables de entorno** (Windows):
+     - `ANDROID_HOME`: C:\Users\[TuUsuario]\AppData\Local\Android\Sdk
+     - `JAVA_HOME`: Ruta de tu instalación de JDK
 
-3. **Configurar variables de entorno**
-   - Copia los archivos de configuración:
-     - `FIREBASE_CONFIG.md` - Configuración de Firebase
-     - `GEMINI_API_KEY.md` - API Key de Google Gemini
-   - Actualiza los valores en `config/firebase.ts`
+#### 5. **Para iOS (Solo macOS)**
+   - **Xcode**: https://apps.apple.com/us/app/xcode/id497799835
+   - **CocoaPods**: 
+     ```bash
+     sudo gem install cocoapods
+     ```
 
-4. **Iniciar la aplicación**
-   ```bash
-   npx expo start
-   ```
+#### 6. **Git** (Para Windows)
+   - Descargar de: https://git-scm.com/download/win
+   - Usar PowerShell o Git Bash
 
-   En la salida encontrarás opciones para:
-   - Emulador de Android
-   - Simulador de iOS
-   - Expo Go (sandbox rápido)
-   - Web browser
+### 📋 Pasos de Instalación Detallados
+
+#### Paso 1: Clonar el Repositorio
+```bash
+# En tu terminal/PowerShell
+git clone https://github.com/HENRYTONY5/dieta_doc.git
+cd dieta_doc
+```
+
+#### Paso 2: Instalar Dependencias del Proyecto
+```bash
+# Instalar todas las dependencias de npm
+npm install
+
+# Esto instalará automáticamente:
+npm list  # Ver todas las dependencias instaladas
+```
+
+#### Paso 3: Verificar Instalación
+```bash
+# Verificar que expo está disponible
+npx expo --version
+
+# Verificar estructura del proyecto
+dir  # En Windows
+ls   # En macOS/Linux
+```
+
+#### Paso 4: Configurar Variables de Entorno y APIs
+
+**A. Firebase Configuration**
+- Lee el archivo `FIREBASE_CONFIG.md`
+- Obtén tus credenciales de Firebase Console: https://console.firebase.google.com/
+- Actualiza `config/firebase.ts` con tu configuración:
+  ```typescript
+  // Ejemplo en config/firebase.ts
+  export const firebaseConfig = {
+    apiKey: "tu-api-key",
+    authDomain: "tu-dominio.firebaseapp.com",
+    projectId: "tu-proyecto",
+    storageBucket: "tu-bucket.appspot.com",
+    messagingSenderId: "tu-id",
+    appId: "tu-app-id"
+  };
+  ```
+
+**B. Google Gemini API**
+- Lee el archivo `GEMINI_API_KEY.md`
+- Crea una API Key en: https://makersuite.google.com/app/apikey
+- Configura en `services/geminiService.ts`:
+  ```typescript
+  const GEMINI_API_KEY = "tu-gemini-api-key";
+  ```
+
+**C. Ollama (Opcional)**
+- Si usarás Ollama localmente: https://ollama.ai/
+- Asegúrate de que el servicio esté ejecutándose en `http://localhost:11434`
+
+#### Paso 5: Iniciar la Aplicación
+```bash
+# Modo desarrollo
+npx expo start
+
+# Presiona:
+# 'a' para abrir en Android Emulator
+# 'i' para abrir en iOS Simulator (solo macOS)
+# 'w' para abrir en web browser
+# 'j' para Expo DevTools
+```
+
+### 📚 Dependencias del Proyecto
+
+#### Dependencias Principales (package.json)
+```json
+{
+  "dependencies": {
+    "react": "18.x.x",
+    "react-native": "0.73.x",
+    "expo": "~50.x.x",
+    "expo-router": "~3.x.x",
+    "expo-font": "~11.x.x",
+    "expo-splash-screen": "~0.26.x",
+    "expo-status-bar": "~1.11.x",
+    "react-native-gesture-handler": "~2.x.x",
+    "react-native-reanimated": "~3.x.x",
+    "react-native-screens": "~3.x.x",
+    "firebase": "^10.x.x",
+    "typescript": "^5.x.x"
+  },
+  "devDependencies": {
+    "@types/react": "^18.x.x",
+    "@types/react-native": "^0.73.x",
+    "@react-native-community/eslint-config": "^3.x.x",
+    "eslint": "^8.x.x"
+  }
+}
+```
+
+### 🔍 Verificación de Instalación
+
+Ejecuta estos comandos para verificar que todo está correcto:
+
+```bash
+# Verificar Node.js
+node --version
+
+# Verificar npm
+npm --version
+
+# Verificar Expo
+npx expo --version
+
+# Listar dependencias instaladas
+npm list --depth=0
+
+# Verificar que el proyecto es válido
+npx expo doctor
+```
+
+### ⚠️ Troubleshooting Común
+
+#### Error: "expo command not found"
+```bash
+# Solución: Instalar expo-cli globalmente
+npm install -g expo-cli
+```
+
+#### Error: "No Android Emulator running"
+```bash
+# Verificar que Android Studio esté instalado
+# Abrir Android Studio → Configure → AVD Manager
+# Crear un emulador o iniciar uno existente
+```
+
+#### Error de Dependencias
+```bash
+# Limpiar cache de npm
+npm cache clean --force
+
+# Eliminar node_modules y package-lock.json
+rm -r node_modules package-lock.json
+
+# Reinstalar
+npm install
+```
+
+#### Puerto 19000 en uso
+```bash
+# El puerto 19000 es usado por Expo
+# Usar puerto diferente:
+npx expo start --port 19001
+```
 
 ## 🔧 Comandos Disponibles
 
