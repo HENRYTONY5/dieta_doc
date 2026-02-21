@@ -1,13 +1,26 @@
 // Servicio para comunicarse con Google Gemini (API gratuita con internet)
 
-import { searchProtocols, FirstAidProtocol } from '@/data/firstAidProtocols';
+import { FirstAidProtocol, searchProtocols } from '@/data/firstAidProtocols';
 
-const GEMINI_API_KEY = 'AIzaSyCNVbcLGktgybdA3fxYChXYwVpKDK59XGI'; // Clave de ejemplo - reemplazar con la tuya
+const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim() || '';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
 
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
+}
+
+function buildLocalFallbackResponse(message: string): string {
+  const protocol = searchProtocols(message)[0];
+
+  if (!protocol) {
+    return `[NIVEL: MODERADA]\n[TIEMPO DE ESTABILIZACIÓN: 10 minutos]\n\n**Te acompaño paso a paso.**\nCon lo que me dices, haré una orientación inicial mientras confirmamos datos clave.\n\n**ORIENTACIÓN INMEDIATA:**\n1. **Mantén la calma** y verifica si la persona respira y responde.\n2. Colócala en un lugar seguro, lejos del riesgo.\n3. Si hay sangrado, presiona con tela limpia de forma continua.\n\n**Para orientarte mejor, respóndeme esto:**\n1. ¿Qué síntoma es el más grave ahora mismo?\n2. ¿Desde cuándo comenzó y si está empeorando?\n\n**⚠️ CUÁNDO LLAMAR A EMERGENCIAS:**\n- Pérdida de conciencia\n- Dificultad respiratoria\n- Sangrado abundante\n\n**SIGUIENTE PASO:**\nRespóndeme esas 2 preguntas y te doy la siguiente acción exacta.`;
+  }
+
+  const steps = protocol.steps.slice(0, 5).map((step, index) => `${index + 1}. ${step}`).join('\n');
+  const call911 = protocol.whenToCall911.slice(0, 4).map(item => `- ${item}`).join('\n');
+
+  return `[NIVEL: ${protocol.level}]\n[TIEMPO DE ESTABILIZACIÓN: ${protocol.stabilizationTime} minutos]\n\n**Te acompaño paso a paso.**\nSegún tu descripción, el protocolo más cercano es **${protocol.title}**.\n\n**ORIENTACIÓN INMEDIATA:**\n${steps}\n\n**Para orientarte mejor, respóndeme esto:**\n1. ¿La persona puede hablar y respirar sin dificultad?\n2. ¿El síntoma principal está mejorando o empeorando?\n\n**⚠️ CUÁNDO LLAMAR A EMERGENCIAS:**\n${call911}\n\n**SIGUIENTE PASO:**\nCuando me respondas esas 2 preguntas, te doy la siguiente acción específica.`;
 }
 
 /**
@@ -52,6 +65,10 @@ export async function sendMessageToGemini(
   conversationHistory: Message[] = []
 ): Promise<string> {
   try {
+    if (!GEMINI_API_KEY) {
+      throw new Error('Falta EXPO_PUBLIC_GEMINI_API_KEY');
+    }
+
     // Buscar protocolos relevantes basados en el mensaje del usuario
     const relevantProtocols = searchProtocols(message).slice(0, 2); // Top 2 más relevantes
     
@@ -70,7 +87,16 @@ export async function sendMessageToGemini(
 2. Usa formato Markdown: **negritas** para pasos importantes
 3. SIEMPRE clasifica la emergencia al inicio
 4. Da instrucciones NUMERADAS y MUY CLARAS
-5. Pregúntale al usuario detalles específicos antes de dar pasos
+  5. Mantén FLUJO DE CONVERSACIÓN por turnos (no monólogo)
+  6. Haz máximo 2 preguntas por turno para no saturar
+  7. En cada respuesta incluye una acción inmediata segura + una pregunta de seguimiento
+
+  🗣 ESTILO CONVERSACIONAL OBLIGATORIO:
+  - Inicia con una frase breve de acompañamiento (ej: "Te ayudo paso a paso")
+  - Luego orienta con 3-5 pasos concretos y accionables
+  - Después pregunta solo lo esencial (1-2 preguntas)
+  - Cierra con "SIGUIENTE PASO" para guiar el siguiente turno
+  - Si el usuario ya respondió algo, NO repitas preguntas previas innecesarias
 
 🚨 CLASIFICACIÓN DE EMERGENCIAS:
 - **CRÍTICA**: No respira, inconsciente, sangrado abundante, paro cardíaco
@@ -86,12 +112,15 @@ export async function sendMessageToGemini(
 [TIEMPO DE ESTABILIZACIÓN: X minutos]
 
 **¿Qué pasó exactamente?**
-(Hacer 2-3 preguntas específicas sobre la situación si necesitas más información)
+(Haz 1-2 preguntas específicas sobre la situación)
 
-**PASOS A SEGUIR:**
+**ORIENTACIÓN INMEDIATA:**
 1. [Paso claro con **negritas** en lo importante]
 2. [Siguiente paso]
 3. [etc.]
+
+**SIGUIENTE PASO:**
+[Indica exactamente qué debe responder o hacer ahora el usuario]
 
 **⚠️ CUÁNDO LLAMAR A EMERGENCIAS:**
 - [Condiciones específicas para esta emergencia]
@@ -103,6 +132,7 @@ export async function sendMessageToGemini(
 - Responde en español puro
 - Usa markdown para formato (**negritas**, listas)
 - Sé claro, directo y profesional
+- Mantén conversación guiada en varios turnos
 - Basa tus respuestas en los protocolos proporcionados
 - Si hay CUALQUIER duda sobre gravedad: recomienda 911`;
 
@@ -178,10 +208,7 @@ export async function sendMessageToGemini(
     }
   } catch (error) {
     console.error('❌ Error al comunicarse con Gemini:', error);
-    if (error instanceof Error) {
-      throw error;
-    }
-    throw new Error('No se pudo conectar con Gemini. Verifica tu conexión a internet.');
+    return buildLocalFallbackResponse(message);
   }
 }
 
@@ -190,6 +217,10 @@ export async function sendMessageToGemini(
  */
 export async function checkGeminiStatus(): Promise<boolean> {
   try {
+    if (!GEMINI_API_KEY) {
+      return false;
+    }
+
     const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: {

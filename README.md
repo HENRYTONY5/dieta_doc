@@ -159,9 +159,9 @@ ls   # En macOS/Linux
 **B. Google Gemini API**
 - Lee el archivo `GEMINI_API_KEY.md`
 - Crea una API Key en: https://makersuite.google.com/app/apikey
-- Configura en `services/geminiService.ts`:
-  ```typescript
-  const GEMINI_API_KEY = "tu-gemini-api-key";
+- Crea `.env` (puedes copiar `.env.example`) y configura:
+  ```bash
+  EXPO_PUBLIC_GEMINI_API_KEY=TU_GEMINI_API_KEY_AQUI
   ```
 
 **C. Ollama (Opcional)**

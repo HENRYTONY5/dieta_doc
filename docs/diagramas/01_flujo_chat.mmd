@@ -1,0 +1,34 @@
+flowchart TD
+    A[Usuario abre Chat] --> B[Verificar estado IA]
+    B --> C{Historial existe?}
+    C -- No --> D[Mostrar bienvenida]
+    C -- Sí --> E[Cargar historial Firestore]
+    D --> F[Flujo de admisión]
+    E --> F
+
+    F --> G[Capturar nombre]
+    G --> H[Capturar edad]
+    H --> I[Capturar consciencia]
+    I --> J{Detecta emergencia?}
+
+    J -- No --> K[Continuar conversación guiada]
+    J -- Sí --> L[Ranking protocolos]
+    L --> M{Top-2 cercanos?}
+    M -- Sí --> N[Desambiguación 1/2]
+    M -- No --> O[Seleccionar protocolo top-1]
+    N --> O
+
+    O --> P{Árbol de decisión aplica?}
+    P -- Sí --> Q[Navegación por nodos]
+    P -- No --> R[RAG + Gemini]
+    Q --> S[Respuesta asistente]
+    R --> S
+
+    S --> T[Detectar nivel y tiempo]
+    T --> U{Nivel crítico/urgente?}
+    U -- Sí --> V[Alerta 911 + temporizador]
+    U -- No --> W[Seguimiento conversacional]
+
+    V --> X[Guardar mensajes en Firestore]
+    W --> X
+    K --> X

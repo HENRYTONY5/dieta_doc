@@ -1,0 +1,46 @@
+classDiagram
+    class ChatScreen {
+      +messages: ChatMessage[]
+      +intakeStep: IntakeStep
+      +disambiguationState: DisambiguationState
+      +enviarMensaje()
+      +proceedWithMessage()
+      +handleIntakeFlow()
+    }
+
+    class GeminiService {
+      +sendMessageToGemini(message, history)
+      +checkGeminiStatus()
+      -buildLocalFallbackResponse()
+    }
+
+    class DecisionTreeEngine {
+      +startDecisionTree(userMessage)
+      +navigateTree(tree, nodeId, answer)
+      -formatNodeAsResponse()
+    }
+
+    class KnowledgeBase {
+      +getEnrichedPrompt(userMessage)
+      +searchRelevantProtocols(userMessage)
+      +getProtocolById(id)
+    }
+
+    class FirstAidProtocols {
+      +searchProtocols(query)
+      +getProtocolMatches(query)
+      -tokenize(value)
+      -normalizeText(value)
+    }
+
+    class Firestore {
+      +addDoc(chats)
+      +getDocs(chats)
+    }
+
+    ChatScreen --> GeminiService
+    ChatScreen --> DecisionTreeEngine
+    ChatScreen --> KnowledgeBase
+    ChatScreen --> FirstAidProtocols
+    ChatScreen --> Firestore
+    KnowledgeBase --> Firestore

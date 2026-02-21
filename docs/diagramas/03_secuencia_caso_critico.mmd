@@ -1,0 +1,19 @@
+sequenceDiagram
+    autonumber
+    actor U as Usuario
+    participant C as ChatScreen
+    participant M as Matching
+    participant G as GeminiService
+    participant K as KnowledgeBase
+    participant F as Firestore
+
+    U->>C: Describe síntoma crítico
+    C->>M: getProtocolMatches(input)
+    M-->>C: Top matches + score
+    C->>K: getEnrichedPrompt(input + contexto)
+    K-->>C: Prompt enriquecido
+    C->>G: sendMessageToGemini(prompt, historial)
+    G-->>C: Respuesta orientada
+    C->>C: detectEmergencyLevel + extractStabilizationTime
+    C->>U: Mostrar respuesta + alerta 911 + timer
+    C->>F: Guardar mensajes (user/assistant)

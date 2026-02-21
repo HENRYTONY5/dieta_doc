@@ -1,0 +1,23 @@
+stateDiagram-v2
+    [*] --> Inicio
+    Inicio --> VerificacionIA
+    VerificacionIA --> Bienvenida
+    Bienvenida --> IntakeNombre
+    IntakeNombre --> IntakeEdad
+    IntakeEdad --> IntakeConsciente
+    IntakeConsciente --> EvaluacionSintomas
+
+    EvaluacionSintomas --> ConversacionGeneral: sin emergencia
+    EvaluacionSintomas --> Desambiguacion: top-2 cercano
+    Desambiguacion --> EvaluacionSintomas: opción elegida
+
+    EvaluacionSintomas --> DecisionTree: árbol aplica
+    EvaluacionSintomas --> RAG_LLM: árbol no aplica
+
+    DecisionTree --> MonitoreoEmergencia
+    RAG_LLM --> MonitoreoEmergencia
+
+    MonitoreoEmergencia --> ConversacionGeneral: nivel leve/moderada
+    MonitoreoEmergencia --> AlertaCritica: nivel crítica/urgente
+    AlertaCritica --> ConversacionGeneral
+    ConversacionGeneral --> [*]

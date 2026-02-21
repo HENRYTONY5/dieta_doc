@@ -16,6 +16,11 @@ export interface FirstAidProtocol {
   category: 'trauma' | 'respiratorio' | 'cardiovascular' | 'quemadura' | 'envenenamiento' | 'neurologico' | 'otro';
 }
 
+export interface ProtocolMatch {
+  protocol: FirstAidProtocol;
+  score: number;
+}
+
 export const firstAidProtocols: FirstAidProtocol[] = [
   {
     id: 'dedo-machucado',
@@ -959,25 +964,109 @@ export const firstAidProtocols: FirstAidProtocol[] = [
   }
 ];
 
-// Función para buscar protocolos por palabras clave
-export function searchProtocols(query: string): FirstAidProtocol[] {
-  const searchTerms = query.toLowerCase().split(' ');
-  
+const STOPWORDS = new Set([
+  'de', 'la', 'el', 'los', 'las', 'y', 'o', 'con', 'sin', 'en', 'por', 'para', 'un', 'una', 'al',
+  'del', 'que', 'se', 'me', 'mi', 'tu', 'su', 'es', 'esta', 'está', 'hay', 'persona', 'paciente'
+]);
+
+function normalizeText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function tokenize(value: string): string[] {
+  return normalizeText(value)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3 && !STOPWORDS.has(term));
+}
+
+function phraseTokensMatch(queryTokens: string[], phraseTokens: string[]): boolean {
+  if (phraseTokens.length === 0) return false;
+  return phraseTokens.every((phraseToken) =>
+    queryTokens.some((queryToken) => queryToken === phraseToken || queryToken.startsWith(phraseToken) || phraseToken.startsWith(queryToken))
+  );
+}
+
+// Obtiene protocolos rankeados por relevancia
+export function getProtocolMatches(query: string): ProtocolMatch[] {
+  const normalizedQuery = normalizeText(query);
+  const queryTokens = tokenize(query);
+
+  if (!normalizedQuery.trim() || queryTokens.length === 0) {
+    return [];
+  }
+
+  const levelOrder = { CRÍTICA: 0, URGENTE: 1, MODERADA: 2, LEVE: 3 };
+
   return firstAidProtocols
-    .filter(protocol => {
-      // Buscar coincidencias en keywords, title, symptoms
-      const searchableText = [
-        ...protocol.keywords,
-        protocol.title,
-        ...protocol.symptoms,
-        protocol.description
-      ].join(' ').toLowerCase();
-      
-      return searchTerms.some(term => searchableText.includes(term));
+    .map((protocol) => {
+      let score = 0;
+
+      const keywordHits = protocol.keywords.reduce((acc, keyword) => {
+        const normalizedKeyword = normalizeText(keyword);
+        const keywordTokens = tokenize(keyword);
+
+        if (normalizedKeyword.length >= 4 && normalizedQuery.includes(normalizedKeyword)) {
+          return acc + 7;
+        }
+        if (phraseTokensMatch(queryTokens, keywordTokens)) {
+          return acc + (keywordTokens.length > 1 ? 6 : 4);
+        }
+        return acc;
+      }, 0);
+
+      const symptomHits = protocol.symptoms.reduce((acc, symptom) => {
+        const normalizedSymptom = normalizeText(symptom);
+        const symptomTokens = tokenize(symptom);
+
+        if (normalizedSymptom.length >= 6 && normalizedQuery.includes(normalizedSymptom)) {
+          return acc + 5;
+        }
+        if (phraseTokensMatch(queryTokens, symptomTokens)) {
+          return acc + (symptomTokens.length > 1 ? 4 : 2);
+        }
+        return acc;
+      }, 0);
+
+      const titleTokens = tokenize(protocol.title);
+      const titleHit = phraseTokensMatch(queryTokens, titleTokens) ? 6 : 0;
+
+      const relatedHits = protocol.relatedConditions.reduce((acc, condition) => {
+        const conditionTokens = tokenize(condition);
+        return acc + (phraseTokensMatch(queryTokens, conditionTokens) ? 3 : 0);
+      }, 0);
+
+      score = keywordHits + symptomHits + titleHit + relatedHits;
+
+      const matchedDistinctTokens = queryTokens.filter((token) => {
+        const allProtocolTokens = tokenize([
+          protocol.title,
+          protocol.description,
+          ...protocol.keywords,
+          ...protocol.symptoms,
+          ...protocol.relatedConditions,
+        ].join(' '));
+        return allProtocolTokens.some((protocolToken) => protocolToken === token || protocolToken.startsWith(token) || token.startsWith(protocolToken));
+      }).length;
+
+      if (matchedDistinctTokens >= 2) {
+        score += 3;
+      }
+
+      return { protocol, score };
     })
+    .filter(({ score }) => score >= 6)
     .sort((a, b) => {
-      // Ordenar por nivel de emergencia (crítica primero)
-      const levelOrder = { CRÍTICA: 0, URGENTE: 1, MODERADA: 2, LEVE: 3 };
-      return levelOrder[a.level] - levelOrder[b.level];
+      if (b.score !== a.score) return b.score - a.score;
+      return levelOrder[a.protocol.level] - levelOrder[b.protocol.level];
     });
+}
+
+// Función para buscar protocolos por palabras clave (precisa, con score)
+export function searchProtocols(query: string): FirstAidProtocol[] {
+  return getProtocolMatches(query).map(({ protocol }) => protocol);
 }

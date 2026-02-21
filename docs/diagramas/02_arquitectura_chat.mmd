@@ -1,0 +1,24 @@
+flowchart LR
+    subgraph Cliente[App Expo React Native]
+      UI[chat.tsx\nUI + Estado + Orquestación]
+      DT[decisionTreeEngine.ts\nMotor árbol de decisión]
+      RAG[knowledgeBase.ts\nRAG + búsqueda protocolos]
+      MATCH[firstAidProtocols.ts\nScoring + desambiguación]
+      LLM[geminiService.ts\nPrompt + fallback local]
+      PARSER[ollamaService.ts\nParser nivel/tiempo]
+    end
+
+    subgraph Nube[Servicios externos]
+      GEM[Gemini API]
+      FS[(Firestore)]
+    end
+
+    UI --> DT
+    UI --> RAG
+    UI --> MATCH
+    UI --> LLM
+    UI --> PARSER
+
+    RAG --> FS
+    UI --> FS
+    LLM --> GEM

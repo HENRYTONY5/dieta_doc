@@ -1,0 +1,31 @@
+flowchart TB
+    subgraph Presentacion
+      A1[ChatScreen UI]
+      A2[Render Markdown]
+      A3[Panel de emergencia]
+    end
+
+    subgraph Dominio
+      B1[Intake/Triaje]
+      B2[Detección de emergencia]
+      B3[Desambiguación]
+      B4[Decisión guiada]
+      B5[Clasificación nivel/tiempo]
+    end
+
+    subgraph Infraestructura
+      C1[Gemini API]
+      C2[Firestore chats]
+      C3[Base protocolos local]
+    end
+
+    A1 --> B1
+    A1 --> B2
+    A1 --> B3
+    A1 --> B4
+    A1 --> B5
+
+    B4 --> C1
+    B4 --> C3
+    A1 --> C2
+    B4 --> C2

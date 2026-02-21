@@ -26,24 +26,18 @@ https://makersuite.google.com/app/apikey
 ### 3. Crear API Key
 1. Clic en **"Create API Key"** o **"Crear clave de API"**
 2. Selecciona un proyecto existente o crea uno nuevo
-3. Copia la API Key que aparece (formato: `AIzaSy...`)
+3. Copia la API Key que aparece en pantalla
 
 ### 4. Configurar en la app
 
-Abre el archivo: `services/geminiService.ts`
+Crea un archivo `.env` en la raíz del proyecto (puedes copiar `.env.example`) y agrega:
 
-Busca la línea 3:
-```typescript
-const GEMINI_API_KEY = 'AIzaSyBk8qH7vZx9xY2pQwRtLmNjHgFdEcBaOiQ';
-```
-
-Reemplaza con tu API Key:
-```typescript
-const GEMINI_API_KEY = 'TU_API_KEY_AQUI';
+```bash
+EXPO_PUBLIC_GEMINI_API_KEY=TU_GEMINI_API_KEY_AQUI
 ```
 
 ### 5. ¡Listo!
-Guarda el archivo y la app empezará a usar tu API Key.
+Guarda el archivo y reinicia la app para que tome la variable de entorno.
 
 ## ⚠️ Importante
 

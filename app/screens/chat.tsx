@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, KeyboardAvoidingView, Platform, Alert, ActivityIndicator, Linking } from 'react-native';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { sendMessageToDeepSeek, checkOllamaStatus, detectEmergencyLevel, extractStabilizationTime } from '@/services/ollamaService';
-import { getEnrichedPrompt, analyzeMessageCategory } from '@/services/knowledgeBase';
-import { startDecisionTree, navigateTree, shouldStartNewTree, parseNumericAnswer } from '@/services/decisionTreeEngine';
-import { DecisionTree } from '@/data/decisionTrees';
 import { auth, db } from '@/config/firebase';
-import { collection, addDoc, query, orderBy, getDocs, where } from 'firebase/firestore';
+import { DecisionTree } from '@/data/decisionTrees';
+import { FirstAidProtocol, getProtocolMatches, searchProtocols } from '@/data/firstAidProtocols';
+import { navigateTree, startDecisionTree } from '@/services/decisionTreeEngine';
+import { checkGeminiStatus, sendMessageToGemini } from '@/services/geminiService';
+import { analyzeMessageCategory, getEnrichedPrompt } from '@/services/knowledgeBase';
+import { detectEmergencyLevel, extractStabilizationTime } from '@/services/ollamaService';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { addDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 
 export interface Message {
@@ -22,6 +24,13 @@ interface ChatMessage extends Message {
   timestamp: Date;
   emergencyLevel?: EmergencyLevel;
   stabilizationTime?: number;
+}
+
+type IntakeStep = 'nombre' | 'edad' | 'consciente' | 'completado';
+
+interface DisambiguationState {
+  active: boolean;
+  options: FirstAidProtocol[];
 }
 
 export default function ChatScreen() {
@@ -45,6 +54,160 @@ export default function ChatScreen() {
   const [currentTree, setCurrentTree] = useState<DecisionTree | null>(null);
   const [currentNodeId, setCurrentNodeId] = useState<string | null>(null);
   const [inDecisionMode, setInDecisionMode] = useState(false);
+  const [intakeStep, setIntakeStep] = useState<IntakeStep>('nombre');
+  const [patientName, setPatientName] = useState<string | null>(null);
+  const [patientAge, setPatientAge] = useState<number | null>(null);
+  const [isPatientConscious, setIsPatientConscious] = useState<boolean | null>(null);
+  const [disambiguationState, setDisambiguationState] = useState<DisambiguationState>({
+    active: false,
+    options: [],
+  });
+
+  const buildWelcomeMessage = (): ChatMessage => ({
+    id: `welcome-${Date.now()}`,
+    role: 'assistant',
+    content:
+      'Hola, soy tu asistente de primeros auxilios. Te orientaré paso a paso.\n\nPara iniciar, ¿cuál es tu **nombre**?',
+    timestamp: new Date(),
+  });
+
+  const detectEmergencyKeywords = (text: string): boolean => {
+    const normalizedText = text.toLowerCase();
+    if (searchProtocols(normalizedText).length > 0) return true;
+
+    const criticalHints = [
+      'no respira', 'inconsciente', 'convulsion', 'convulsión', 'sangrado abundante', 'hemorragia',
+      'dolor de pecho', 'infarto', 'acv', 'ictus', 'atragant', 'anafilax', 'electroc', 'quemadura',
+      'fractura', 'luxacion', 'luxación', 'dificultad para respirar'
+    ];
+    const hasCriticalHint = criticalHints.some((hint) => normalizedText.includes(hint));
+
+    const analysis = analyzeMessageCategory(normalizedText);
+    return hasCriticalHint && analysis.confidence >= 0.67;
+  };
+
+  const extractName = (text: string): string | null => {
+    const normalized = text.trim();
+    const match = normalized.match(/(?:me llamo|mi nombre es|soy)\s+([a-záéíóúñ ]{2,40})/i);
+    if (match?.[1]) {
+      return match[1].trim().split(' ')[0];
+    }
+
+    const firstToken = normalized.split(' ')[0]?.replace(/[^a-záéíóúñ]/gi, '');
+    if (firstToken && firstToken.length >= 2) return firstToken;
+    return null;
+  };
+
+  const extractAge = (text: string): number | null => {
+    const match = text.match(/(\d{1,3})/);
+    if (!match) return null;
+    const age = parseInt(match[1], 10);
+    if (age < 1 || age > 120) return null;
+    return age;
+  };
+
+  const extractConsciousStatus = (text: string): boolean | null => {
+    const normalized = text.toLowerCase();
+    if (/\b(si|sí|consciente|responde|despierto|despierta)\b/.test(normalized)) return true;
+    if (/\b(no|inconsciente|no responde|desmayad|desmayo)\b/.test(normalized)) return false;
+    return null;
+  };
+
+  const buildPatientContext = (): string => {
+    const chunks: string[] = [];
+    if (patientName) chunks.push(`Nombre de contacto: ${patientName}`);
+    if (patientAge) chunks.push(`Edad aproximada: ${patientAge} años`);
+    if (isPatientConscious !== null) chunks.push(`Paciente consciente: ${isPatientConscious ? 'sí' : 'no'}`);
+    return chunks.length > 0 ? `\n\n📋 DATOS BÁSICOS DEL CASO:\n- ${chunks.join('\n- ')}` : '';
+  };
+
+  const normalizeForCompare = (value: string): string => {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  };
+
+  const buildDisambiguationPrompt = (options: FirstAidProtocol[]): string => {
+    const first = options[0];
+    const second = options[1];
+
+    const secondSymptoms = second.symptoms.map(symptom => normalizeForCompare(symptom));
+    const firstSymptoms = first.symptoms.map(symptom => normalizeForCompare(symptom));
+
+    const firstDistinct = first.symptoms.find(symptom => !secondSymptoms.includes(normalizeForCompare(symptom))) || first.symptoms[0];
+    const secondDistinct = second.symptoms.find(symptom => !firstSymptoms.includes(normalizeForCompare(symptom))) || second.symptoms[0];
+
+    return `Veo dos opciones probables y quiero ser exacto antes de orientarte:\n\n` +
+      `1) **${first.title}**\n` +
+      `   - Suele destacar: ${firstDistinct}\n\n` +
+      `2) **${second.title}**\n` +
+      `   - Suele destacar: ${secondDistinct}\n\n` +
+      `¿Cuál se parece más? Responde **1** o **2** (o describe cuál síntoma predomina).`;
+  };
+
+  const resolveDisambiguationSelection = (input: string, options: FirstAidProtocol[]): FirstAidProtocol | null => {
+    const normalized = normalizeForCompare(input);
+
+    if (normalized.match(/\b1\b|primera|opcion 1|opción 1/)) return options[0];
+    if (normalized.match(/\b2\b|segunda|opcion 2|opción 2/)) return options[1];
+
+    const firstTitle = normalizeForCompare(options[0].title);
+    const secondTitle = normalizeForCompare(options[1].title);
+
+    if (firstTitle.split(' ').some(token => token.length > 4 && normalized.includes(token))) return options[0];
+    if (secondTitle.split(' ').some(token => token.length > 4 && normalized.includes(token))) return options[1];
+
+    const firstSymptomsMatch = options[0].symptoms.some(symptom => normalized.includes(normalizeForCompare(symptom).split(' ').slice(0, 3).join(' ')));
+    const secondSymptomsMatch = options[1].symptoms.some(symptom => normalized.includes(normalizeForCompare(symptom).split(' ').slice(0, 3).join(' ')));
+
+    if (firstSymptomsMatch && !secondSymptomsMatch) return options[0];
+    if (secondSymptomsMatch && !firstSymptomsMatch) return options[1];
+
+    return null;
+  };
+
+  const handleIntakeFlow = (userInput: string): string | null => {
+    if (intakeStep === 'nombre') {
+      const detectedName = extractName(userInput);
+      if (!detectedName) {
+        return 'Perfecto. Para continuar necesito tu **nombre** (por ejemplo: "Me llamo Ana").';
+      }
+
+      setPatientName(detectedName);
+      setIntakeStep('edad');
+      return `Mucho gusto, **${detectedName}**. ¿Qué **edad** tiene la persona afectada?`;
+    }
+
+    if (intakeStep === 'edad') {
+      const detectedAge = extractAge(userInput);
+      if (!detectedAge) {
+        return 'Gracias. Ahora indícame la **edad en número** (ejemplo: 34).';
+      }
+
+      setPatientAge(detectedAge);
+      setIntakeStep('consciente');
+      return 'Entendido. Último dato: ¿la persona está **consciente**? (sí/no)';
+    }
+
+    if (intakeStep === 'consciente') {
+      const consciousStatus = extractConsciousStatus(userInput);
+      if (consciousStatus === null) {
+        return 'Necesito confirmar si está consciente. Respóndeme solo: **sí** o **no**.';
+      }
+
+      setIsPatientConscious(consciousStatus);
+      setIntakeStep('completado');
+
+      if (!consciousStatus) {
+        return 'Entendido: persona **inconsciente**. Si no lo hiciste, llama al **911** ahora.\n\nAhora dime qué está ocurriendo (ejemplo: "no respira", "sangrado abundante", "convulsión").';
+      }
+
+      return 'Gracias, ya tengo los datos básicos. Ahora descríbeme la **emergencia** para orientarte paso a paso.';
+    }
+
+    return 'Cuéntame qué emergencia presenta la persona para continuar con la orientación.';
+  };
 
   useEffect(() => {
     verificarOllama();
@@ -120,20 +283,9 @@ export default function ChatScreen() {
 
   const verificarOllama = async () => {
     setCheckingStatus(true);
-    const status = await checkOllamaStatus();
+    const status = await checkGeminiStatus();
     setOllamaOnline(status);
     setCheckingStatus(false);
-    
-    if (!status) {
-      Alert.alert(
-        'Ollama no está corriendo',
-        'No se pudo conectar con Ollama. Asegúrate de:\n\n1. Tener Ollama instalado\n2. Ejecutar "ollama serve" en terminal\n3. Tener el modelo deepseek-r1:1.5b descargado',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Intentar de nuevo', onPress: verificarOllama }
-        ]
-      );
-    }
   };
 
   const cargarHistorial = async () => {
@@ -163,7 +315,13 @@ export default function ChatScreen() {
       // Ordenar en cliente por timestamp
       historial.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-      setMessages(historial);
+      if (historial.length === 0) {
+        const welcomeMessage = buildWelcomeMessage();
+        setMessages([welcomeMessage]);
+        guardarMensajeEnFirestore(welcomeMessage);
+      } else {
+        setMessages(historial);
+      }
     } catch (error) {
       console.error('Error al cargar historial:', error);
       // Si aún falla, mostrar alerta con instrucciones
@@ -195,19 +353,6 @@ export default function ChatScreen() {
 
   const enviarMensaje = async () => {
     if (!inputText.trim() || isLoading) return;
-    
-    // Verificar conexión pero permitir enviar de todos modos
-    if (!ollamaOnline) {
-      Alert.alert(
-        'Ollama no disponible', 
-        'Ollama no está corriendo. Asegúrate de tener "ollama serve" ejecutándose.',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Reintentar', onPress: verificarOllama }
-        ]
-      );
-      return;
-    }
 
     await proceedWithMessage();
   };
@@ -228,6 +373,69 @@ export default function ChatScreen() {
 
     try {
       let respuesta: string;
+      const hasEmergencyKeywords = detectEmergencyKeywords(userInput);
+      let forcedProtocol: FirstAidProtocol | null = null;
+
+      if (disambiguationState.active && disambiguationState.options.length === 2) {
+        const selectedProtocol = resolveDisambiguationSelection(userInput, disambiguationState.options);
+
+        if (!selectedProtocol) {
+          respuesta = 'Para continuar sin confusión, necesito que elijas una opción. Responde **1** o **2**.';
+          const assistantMessage: ChatMessage = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: respuesta,
+            timestamp: new Date(),
+          };
+
+          setMessages(prev => [...prev, assistantMessage]);
+          guardarMensajeEnFirestore(assistantMessage);
+          return;
+        }
+
+        forcedProtocol = selectedProtocol;
+        setDisambiguationState({ active: false, options: [] });
+      }
+
+      if (!hasEmergencyKeywords && !inDecisionMode && !forcedProtocol) {
+        respuesta = handleIntakeFlow(userInput) || 'Cuéntame qué emergencia presenta la persona para continuar.';
+
+        const assistantMessage: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: respuesta,
+          timestamp: new Date(),
+        };
+
+        setMessages(prev => [...prev, assistantMessage]);
+        guardarMensajeEnFirestore(assistantMessage);
+        return;
+      }
+
+      if (!inDecisionMode && !forcedProtocol) {
+        const matches = getProtocolMatches(`${userInput}${buildPatientContext()}`);
+        if (matches.length >= 2) {
+          const topMatch = matches[0];
+          const secondMatch = matches[1];
+          const scoresAreClose = (topMatch.score - secondMatch.score) <= 2;
+
+          if (scoresAreClose) {
+            const options = [topMatch.protocol, secondMatch.protocol];
+            setDisambiguationState({ active: true, options });
+
+            const assistantMessage: ChatMessage = {
+              id: (Date.now() + 1).toString(),
+              role: 'assistant',
+              content: buildDisambiguationPrompt(options),
+              timestamp: new Date(),
+            };
+
+            setMessages(prev => [...prev, assistantMessage]);
+            guardarMensajeEnFirestore(assistantMessage);
+            return;
+          }
+        }
+      }
       
       // 🌳 MODO ÁRBOL DE DECISIÓN
       if (inDecisionMode && currentTree && currentNodeId) {
@@ -305,7 +513,11 @@ export default function ChatScreen() {
           console.log('📊 Análisis de mensaje:', analysis);
 
           // Obtener prompt enriquecido con RAG
-          const enrichedMessage = await getEnrichedPrompt(userInput);
+          const selectedProtocolHint = forcedProtocol
+            ? `\n\n🎯 PROTOCOLO PRIORIZADO POR DESAMBIGUACIÓN:\n- ${forcedProtocol.title}\n- Nivel base: ${forcedProtocol.level}`
+            : '';
+
+          const enrichedMessage = await getEnrichedPrompt(`${userInput}${buildPatientContext()}${selectedProtocolHint}`);
           console.log('✨ Usando RAG para enriquecer contexto');
 
           // Obtener historial para contexto (últimos 5 mensajes)
@@ -314,8 +526,8 @@ export default function ChatScreen() {
             content: msg.content,
           }));
 
-          // Enviar mensaje enriquecido al chatbot (usando DeepSeek/Ollama)
-          respuesta = await sendMessageToDeepSeek(enrichedMessage, conversationHistory);
+          // Enviar mensaje enriquecido al chatbot (Gemini con fallback local)
+          respuesta = await sendMessageToGemini(enrichedMessage, conversationHistory);
 
           // Detectar nivel de emergencia y tiempo
           const emergencyLevel = detectEmergencyLevel(respuesta);
@@ -379,10 +591,17 @@ export default function ChatScreen() {
           text: 'Limpiar',
           style: 'destructive',
           onPress: () => {
-            setMessages([]);
+            const welcomeMessage = buildWelcomeMessage();
+            setMessages([welcomeMessage]);
             setInDecisionMode(false);
             setCurrentTree(null);
             setCurrentNodeId(null);
+            setIntakeStep('nombre');
+            setPatientName(null);
+            setPatientAge(null);
+            setIsPatientConscious(null);
+            setDisambiguationState({ active: false, options: [] });
+            guardarMensajeEnFirestore(welcomeMessage);
           },
         },
       ]
@@ -396,7 +615,7 @@ export default function ChatScreen() {
           <TouchableOpacity onPress={() => router.push('/dashboard')} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.title}>Chat DeepSeek</Text>
+          <Text style={styles.title}>Chat IA</Text>
           <View style={styles.placeholder} />
         </View>
         <View style={styles.loadingContainer}>
