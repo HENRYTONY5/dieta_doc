@@ -1,7 +1,7 @@
 import { auth, db } from '@/config/firebase';
-import { DecisionTree, detectRelevantTree } from '@/data/decisionTrees';
+import { DecisionTree } from '@/data/decisionTrees';
 import { FirstAidProtocol, getProtocolMatches, searchProtocols } from '@/data/firstAidProtocols';
-import { navigateTree } from '@/services/decisionTreeEngine';
+import { navigateTree, shouldStartNewTree, startDecisionTree } from '@/services/decisionTreeEngine';
 import { checkGeminiStatus, sendMessageToGemini } from '@/services/geminiService';
 import { analyzeMessageCategory } from '@/services/knowledgeBase';
 import { cacheResolvedEmergencyCase, findLocalEmergencyMatch } from '@/services/localEmergencyApi';
@@ -27,7 +27,7 @@ interface ChatMessage extends Message {
   stabilizationTime?: number;
 }
 
-type IntakeStep = 'nombre' | 'edad' | 'consciente' | 'completado';
+type IntakeStep = 'nombre' | 'edad' | 'signos_vitales' | 'completado';
 
 interface DisambiguationState {
   active: boolean;
@@ -58,6 +58,7 @@ export default function ChatScreen() {
   const [intakeStep, setIntakeStep] = useState<IntakeStep>('nombre');
   const [patientName, setPatientName] = useState<string | null>(null);
   const [patientAge, setPatientAge] = useState<number | null>(null);
+  const [patientVitals, setPatientVitals] = useState<string | null>(null);
   const [isPatientConscious, setIsPatientConscious] = useState<boolean | null>(null);
   const [disambiguationState, setDisambiguationState] = useState<DisambiguationState>({
     active: false,
@@ -68,22 +69,40 @@ export default function ChatScreen() {
     id: `welcome-${Date.now()}`,
     role: 'assistant',
     content:
-      'Hola, soy tu asistente de primeros auxilios. Te orientaré paso a paso.\n\nPara iniciar, ¿cuál es tu **nombre**?',
+      'Hola, soy tu asistente de primeros auxilios AI. Te orientaré paso a paso ante cualquier situación.\n\nPara iniciar el registro, ¿cuál es tu **nombre**?',
     timestamp: new Date(),
   });
 
+  const detectGreeting = (text: string): boolean => {
+    const normalized = text.toLowerCase();
+    const greetings = ['hola', 'buenos dias', 'buenos días', 'buenas tardes', 'buenas noches', 'que tal', 'qué tal', 'hey'];
+    return greetings.some(g => normalized.includes(g));
+  };
+
   const detectEmergencyKeywords = (text: string): boolean => {
     const normalizedText = text.toLowerCase();
+    
+    // Tercera persona / Sujeto
+    const subjects = ['mi abuelo', 'mi abuela', 'mi hijo', 'mi hija', 'mi papa', 'mi padre', 'mi mama', 'mi madre', 'mi hermano', 'mi hermana', 'mi tio', 'mi tia', 'mi amigo', 'mi amiga', 'mi novio', 'mi novia', 'mi esposa', 'mi esposo', 'mi pareja', 'mi vecino', 'mi vecina', 'el señor', 'la señora', 'un niño', 'una niña', 'bebé', 'un hombre', 'una mujer', 'alguien', 'esta persona'];
+    
     if (searchProtocols(normalizedText).length > 0) return true;
 
     const criticalHints = [
       'no respira', 'inconsciente', 'convulsion', 'convulsión', 'sangrado abundante', 'hemorragia',
       'dolor de pecho', 'infarto', 'acv', 'ictus', 'atragant', 'anafilax', 'electroc', 'quemadura',
-      'fractura', 'luxacion', 'luxación', 'dificultad para respirar'
+      'fractura', 'luxacion', 'luxación', 'dificultad para respirar', 'golpe fuerte', 'accidente', 'posible fractura'
     ];
+    
+    // Detectar si algun sujeto tiene algun hint critico
     const hasCriticalHint = criticalHints.some((hint) => normalizedText.includes(hint));
-
     if (hasCriticalHint) return true;
+    
+    // Verificación combinada opcional para casos más complejos
+    for (const sub of subjects) {
+      if (normalizedText.includes(sub) && (normalizedText.includes('mal') || normalizedText.includes('peor') || normalizedText.includes('caido') || normalizedText.includes('cayó') || normalizedText.includes('desmayó') || normalizedText.includes('pasa algo'))) {
+        return true;
+      }
+    }
 
     const analysis = analyzeMessageCategory(normalizedText);
     return analysis.confidence >= 0.67;
@@ -91,13 +110,22 @@ export default function ChatScreen() {
 
   const extractName = (text: string): string | null => {
     const normalized = text.trim();
+    // No extraer saludos como nombres
+    if (detectGreeting(normalized) && normalized.split(' ').length <= 2) return null;
+
     const match = normalized.match(/(?:me llamo|mi nombre es|soy)\s+([a-záéíóúñ ]{2,40})/i);
     if (match?.[1]) {
       return match[1].trim().split(' ')[0];
     }
 
-    const firstToken = normalized.split(' ')[0]?.replace(/[^a-záéíóúñ]/gi, '');
-    if (firstToken && firstToken.length >= 2) return firstToken;
+    const tokens = normalized.split(' ').filter(t => t.length > 1);
+    const firstToken = tokens[0]?.replace(/[^a-záéíóúñ]/gi, '');
+    
+    // Lista de exclusión simple para el primer token
+    const commonWords = ['el', 'la', 'un', 'una', 'este', 'esta', 'quien', 'quién', 'como', 'cómo'];
+    if (firstToken && firstToken.length >= 2 && !commonWords.includes(firstToken.toLowerCase())) {
+      return firstToken;
+    }
     return null;
   };
 
@@ -120,6 +148,7 @@ export default function ChatScreen() {
     const chunks: string[] = [];
     if (patientName) chunks.push(`Nombre de contacto: ${patientName}`);
     if (patientAge) chunks.push(`Edad aproximada: ${patientAge} años`);
+    if (patientVitals) chunks.push(`Signos vitales reportados: ${patientVitals}`);
     if (isPatientConscious !== null) chunks.push(`Paciente consciente: ${isPatientConscious ? 'sí' : 'no'}`);
     return chunks.length > 0 ? `\n\n📋 DATOS BÁSICOS DEL CASO:\n- ${chunks.join('\n- ')}` : '';
   };
@@ -171,15 +200,35 @@ export default function ChatScreen() {
   };
 
   const handleIntakeFlow = (userInput: string): string | null => {
+    const normalized = userInput.toLowerCase();
+
     if (intakeStep === 'nombre') {
       const detectedName = extractName(userInput);
       if (!detectedName) {
-        return 'Perfecto. Para continuar necesito tu **nombre** (por ejemplo: "Me llamo Ana").';
+        return 'Para poder orientarte mejor necesito tu **nombre** (por ejemplo: "Me llamo Juan").';
       }
-
       setPatientName(detectedName);
-      setIntakeStep('completado'); // Saltamos edad y consciente para hacerlo más rápido
-      return `Mucho gusto, **${detectedName}**. ¿En qué te puedo ayudar hoy? Describe la emergencia o tu consulta.`;
+      setIntakeStep('edad');
+      return `Mucho gusto, **${detectedName}**. ¿Cuál es la **edad** del paciente o víctima?`;
+    }
+
+    if (intakeStep === 'edad') {
+      const age = extractAge(userInput);
+      if (age === null) {
+        return 'Por favor, dime un número válido para la **edad** (ejemplo: "Tiene 45 años").';
+      }
+      setPatientAge(age);
+      setIntakeStep('signos_vitales');
+      return 'Entendido. ¿Sabes sus **signos vitales**? (¿está consciente?, ¿respira?, ¿tiene pulso?)';
+    }
+
+    if (intakeStep === 'signos_vitales') {
+      setPatientVitals(userInput);
+      const conscious = extractConsciousStatus(userInput);
+      if (conscious !== null) setIsPatientConscious(conscious);
+      
+      setIntakeStep('completado');
+      return 'Bien, tengo los datos principales registrados.\n\nAHORA SÍ: **¿Cuál es la emergencia o situación actual?** Describe los síntomas con detalle para ayudarte.';
     }
 
     return null;
@@ -352,6 +401,15 @@ export default function ChatScreen() {
       let forcedProtocol: FirstAidProtocol | null = null;
       let skipLocalMatching = false;
 
+      // 🔄 ELIMINAR ESTADOS PREVIOS SI ES NUEVA EMERGENCIA
+      if (shouldStartNewTree(userInput)) {
+        setInDecisionMode(false);
+        setCurrentTree(null);
+        setCurrentNodeId(null);
+        setDisambiguationState({ active: false, options: [] });
+        // No borramos nombre para no ser repetitivos, pero permitimos nueva evaluación
+      }
+
       if (disambiguationState.active && disambiguationState.options.length === 2) {
         const selectedProtocol = resolveDisambiguationSelection(userInput, disambiguationState.options);
 
@@ -368,40 +426,52 @@ export default function ChatScreen() {
       // Solo hacer el intake si aún no ha completado el paso de nombre
       // EXCEPCIÓN: Si se detecta una emergencia, permitimos que pase directo
       const isEmergency = detectEmergencyKeywords(userInput);
+      const isGreeting = detectGreeting(userInput);
+
+      // Si hay emergencia, saltamos el registro inicial para salvar vidas
+      if (isEmergency && intakeStep !== 'completado') {
+        setIntakeStep('completado');
+      }
 
       // 🌳 DETECTAR SI DEBEMOS ENTRAR EN MODO ÁRBOL DE DECISIÓN
       if (!inDecisionMode && isEmergency) {
-        const relevantTree = detectRelevantTree(userInput);
-        if (relevantTree) {
-          console.log(`🌳 Árbol detectado: ${relevantTree.id}. Iniciando modo guiado...`);
+        const treeResult = await startDecisionTree(userInput);
+        if (treeResult) {
+          console.log(`🌳 Árbol detectado: ${treeResult.tree.id}. Iniciando modo guiado...`);
           setInDecisionMode(true);
-          setCurrentTree(relevantTree);
-          setCurrentNodeId(relevantTree.startNodeId);
-          // Al activar el modo árbol, reseteamos el intake para no estorbar
+          setCurrentTree(treeResult.tree);
+          setCurrentNodeId(treeResult.currentNode.id);
+          // Modo emergencia activa -> completamos registro forzosamente
           setIntakeStep('completado');
+
+          const assistantMessage: ChatMessage = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: treeResult.formattedResponse,
+            timestamp: new Date(),
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          guardarMensajeEnFirestore(assistantMessage);
+          
+          setIsLoading(false);
+          return;
         }
       }
 
+      // FLUJO DE REGISTRO (Intake): Solo si NO es una emergencia crítica detectada arriba
       if (intakeStep !== 'completado' && !inDecisionMode && !forcedProtocol) {
-        // Intentar capturar nombre aunque sea emergencia
-        const nameInText = extractName(userInput);
-        if (nameInText) {
-          setPatientName(nameInText);
-          setIntakeStep('completado');
-        } else if (!isEmergency) {
-          // Si no es emergencia y no dio el nombre, preguntar
-          const intakeResponse = handleIntakeFlow(userInput);
-          if (intakeResponse) {
-            const assistantMessage: ChatMessage = {
-              id: (Date.now() + 1).toString(),
-              role: 'assistant',
-              content: intakeResponse,
-              timestamp: new Date(),
-            };
-            setMessages(prev => [...prev, assistantMessage]);
-            guardarMensajeEnFirestore(assistantMessage);
-            return;
-          }
+        const intakeResponse = handleIntakeFlow(userInput);
+        if (intakeResponse) {
+          const assistantMessage: ChatMessage = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: intakeResponse,
+            timestamp: new Date(),
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          guardarMensajeEnFirestore(assistantMessage);
+          setIsLoading(false);
+          return;
         }
       }
 
@@ -434,8 +504,11 @@ export default function ChatScreen() {
       if (inDecisionMode && currentTree && currentNodeId) {
         console.log('🌳 Navegando árbol de decisión...');
         
+        // Obtener historial reciente para contexto de la IA
+        const recentHistory = messages.slice(-5).map(m => m.content);
+        
         // Navegar en el árbol actual
-        const navigation = await navigateTree(currentTree, currentNodeId, userInput);
+        const navigation = await navigateTree(currentTree, currentNodeId, userInput, recentHistory);
         
         respuesta = navigation.formattedResponse;
         

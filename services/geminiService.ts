@@ -46,6 +46,97 @@ function buildLocalFallbackResponse(message: string): string {
 }
 
 /**
+ * Usa Gemini para mapear una respuesta de lenguaje natural a una de las opciones del árbol
+ */
+export async function mapResponseToOption(
+  question: string,
+  userResponse: string,
+  options: { id: string, label: string }[]
+): Promise<string | null> {
+  try {
+    if (!GEMINI_API_KEY) return null;
+
+    const optionsText = options.map(o => `- ID: ${o.id}, Etiqueta: ${o.label}`).join('\n');
+    
+    const prompt = `Analiza la respuesta del usuario a una pregunta médica y determina cuál de las opciones disponibles es la que mejor coincide.
+    
+PREGUNTA MÉDICA: "${question}"
+RESPUESTA DEL USUARIO: "${userResponse}"
+
+OPCIONES DISPONIBLES:
+${optionsText}
+
+REGLAS:
+1. Responde ÚNICAMENTE con el ID de la opción que mejor coincida.
+2. Si ninguna coincide razonablemente, responde "NONE".
+3. Ignora errores de ortografía o gramática.
+4. Ten en cuenta sinónimos y contexto médico.
+
+ID DE LA OPCIÓN ELEGIDA:`;
+
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 10 }
+      })
+    });
+
+    const data = await response.json();
+    const result = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'NONE';
+    
+    return result === 'NONE' ? null : result;
+  } catch (error) {
+    console.error('Error en mapResponseToOption:', error);
+    return null;
+  }
+}
+
+/**
+ * Usa Gemini para humanizar y dar más detalle a un paso del árbol de decisión
+ */
+export async function enrichNodeResponse(
+  nodeQuestion: string,
+  context: string,
+  history: string[] = []
+): Promise<string | null> {
+  try {
+    if (!GEMINI_API_KEY) return null;
+
+    const prompt = `Como asistente de primeros auxilios, humaniza y mejora este paso de un árbol de decisión.
+    
+PASO ACTUAL: "${nodeQuestion}"
+CONTEXTO MÉDICO: "${context}"
+HISTORIAL RECIENTE: ${history.join(' -> ')}
+
+Instrucciones:
+1. Sé empático y calmado.
+2. Da un pequeño detalle adicional o "pro-tip" de por qué esta pregunta es importante.
+3. El resultado debe ser corto (máximo 3 frases).
+4. No cambies el sentido de la pregunta original.
+5. Responde en ESPAÑOL.
+
+RESPUESTA HUMANIZADA:`;
+
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 150 }
+      })
+    });
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+  } catch (error) {
+    console.error('Error en enrichNodeResponse:', error);
+    return null;
+  }
+}
+
+/**
  * Formatea un protocolo para incluirlo en el prompt
  */
 function formatProtocolForPrompt(protocol: FirstAidProtocol): string {

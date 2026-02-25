@@ -1,7 +1,8 @@
 // Motor de navegación para árboles de decisión
 // Maneja el flujo conversacional guiado por el árbol
 
-import { DecisionTree, DecisionNode, DecisionOption, decisionTrees, detectRelevantTree } from '@/data/decisionTrees';
+import { DecisionNode, DecisionOption, DecisionTree, decisionTrees, detectRelevantTree } from '@/data/decisionTrees';
+import { enrichNodeResponse, mapResponseToOption } from './geminiService';
 import { getProtocolById } from './knowledgeBase';
 
 export interface ConversationState {
@@ -31,11 +32,22 @@ export async function startDecisionTree(userMessage: string): Promise<Navigation
   
   const startNode = tree.nodes[tree.startNodeId];
   
+  // Intentar enriquecer la respuesta inicial con Gemini
+  let baseResponse = formatNodeAsResponse(startNode, tree);
+  try {
+    const enriched = await enrichNodeResponse(startNode.question, startNode.context || tree.description);
+    if (enriched) {
+      baseResponse = `✨ **Guía Inteligente:** ${enriched}\n\n---\n\n${baseResponse}`;
+    }
+  } catch (e) {
+    console.log('Error enriqueciendo respuesta inicial:', e);
+  }
+  
   return {
     currentNode: startNode,
     tree: tree,
     isComplete: false,
-    formattedResponse: formatNodeAsResponse(startNode, tree)
+    formattedResponse: baseResponse
   };
 }
 
@@ -45,7 +57,8 @@ export async function startDecisionTree(userMessage: string): Promise<Navigation
 export async function navigateTree(
   tree: DecisionTree,
   currentNodeId: string,
-  userAnswer: string
+  userAnswer: string,
+  history: string[] = []
 ): Promise<NavigationResult> {
   const currentNode = tree.nodes[currentNodeId];
   
@@ -53,33 +66,42 @@ export async function navigateTree(
   let selectedOption: DecisionOption | null = null;
   
   if (currentNode.options) {
-    // Buscar por coincidencia exacta de ID o keywords
+    // 1. INTENTAR MATCH LOCAL (Rápido)
     const answerLower = userAnswer.toLowerCase();
     
-    for (const option of currentNode.options) {
-      // Coincidencia por keywords
-      if (option.keywords) {
-        if (option.keywords.some(kw => answerLower.includes(kw))) {
+    // Buscar números primero
+    const numIdx = parseNumericAnswer(userAnswer, currentNode.options.length);
+    if (numIdx !== null) {
+      selectedOption = currentNode.options[numIdx];
+    } else {
+      // Buscar por coincidencia exacta de ID o keywords locally
+      for (const option of currentNode.options) {
+        if (option.keywords && option.keywords.some(kw => answerLower.includes(kw))) {
+          selectedOption = option;
+          break;
+        }
+        if (answerLower.includes(option.label.toLowerCase())) {
           selectedOption = option;
           break;
         }
       }
-      
-      // Coincidencia por label
-      if (answerLower.includes(option.label.toLowerCase())) {
-        selectedOption = option;
-        break;
-      }
-      
-      // Coincidencia por ID
-      if (answerLower.includes(option.id)) {
-        selectedOption = option;
-        break;
+    }
+
+    // 2. SI NO HAY MATCH LOCAL, PEDIR AYUDA A GEMINI (Inteligente)
+    if (!selectedOption && currentNode.options.length > 0) {
+      console.log('🧠 IA: Mapeando respuesta natural a opción del árbol...');
+      const geminiOptionId = await mapResponseToOption(
+        currentNode.question,
+        userAnswer,
+        currentNode.options.map(o => ({ id: o.id, label: o.label }))
+      );
+
+      if (geminiOptionId) {
+        selectedOption = currentNode.options.find(o => o.id === geminiOptionId) || null;
       }
     }
     
-    // Si no se encontró coincidencia, usar la primera opción como fallback
-    // o pedir aclaración
+    // Si sigue sin haber coincidencia, pedir aclaración
     if (!selectedOption && currentNode.options.length > 0) {
       return {
         currentNode: currentNode,
@@ -103,17 +125,31 @@ export async function navigateTree(
   
   // Navegar al siguiente nodo
   const nextNode = tree.nodes[selectedOption.nextNodeId];
-  
   const isTerminal = nextNode.type === 'protocol' || nextNode.type === 'emergency';
+  
+  let formattedResponse: string;
+  if (isTerminal) {
+    formattedResponse = await formatTerminalNode(nextNode, tree);
+  } else {
+    formattedResponse = formatNodeAsResponse(nextNode, tree);
+    
+    // Intentar enriquecer con Gemini solo para nodos no terminales (preguntas)
+    try {
+      const enriched = await enrichNodeResponse(nextNode.question, nextNode.context || tree.description, history);
+      if (enriched) {
+        formattedResponse = `✨ **Dato Vital:** ${enriched}\n\n---\n\n${formattedResponse}`;
+      }
+    } catch (e) {
+      console.log('Error enriqueciendo respuesta:', e);
+    }
+  }
   
   return {
     currentNode: nextNode,
     tree: tree,
     isComplete: isTerminal,
     protocolId: nextNode.protocolId,
-    formattedResponse: isTerminal 
-      ? await formatTerminalNode(nextNode, tree)
-      : formatNodeAsResponse(nextNode, tree)
+    formattedResponse: formattedResponse
   };
 }
 
