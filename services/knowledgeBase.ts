@@ -2,8 +2,8 @@
 // Busca información relevante y la integra con el chatbot
 
 import { db } from '@/config/firebase';
-import { collection, query, getDocs, addDoc, doc, setDoc, where } from 'firebase/firestore';
 import { FirstAidProtocol, firstAidProtocols, searchProtocols } from '@/data/firstAidProtocols';
+import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
 
 /**
  * Inicializa la base de conocimiento en Firestore
@@ -214,14 +214,22 @@ export function analyzeMessageCategory(message: string): {
   
   for (const [category, keywords] of Object.entries(categoryKeywords)) {
     const matches = keywords.filter(keyword => messageLower.includes(keyword));
-    if (matches.length > bestScore) {
-      bestScore = matches.length;
+    
+    // Si hay una palabra clave muy fuerte, aumentamos el score
+    let score = matches.length;
+    const strongKeywords = ['inconsciente', 'paro', 'infarto', 'no respira', 'muerto', 'sangrado'];
+    if (strongKeywords.some(sw => messageLower.includes(sw))) {
+      score += 2;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
       bestCategory = category;
       foundKeywords = matches;
     }
   }
   
-  const confidence = Math.min(bestScore / 3, 1); // Max 100% con 3+ coincidencias
+  const confidence = Math.min(bestScore / 2, 1); // Ahora con 2 puntos llegamos a 100% o nivel alto
   
   return {
     category: bestCategory,

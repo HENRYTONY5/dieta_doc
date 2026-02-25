@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "notes": "Reglas base para triage conversacional. Edita este archivo para entrenar la clasificación.",
+  "keywords": {
+    "criticalHints": [
+      "no respira",
+      "inconsciente",
+      "paro cardiaco",
+      "hemorragia",
+      "sangrado abundante",
+      "convulsion",
+      "atragantamiento",
+      "asfixia",
+      "anafilaxia",
+      "dolor de pecho intenso",
+      "acv",
+      "ictus"
+    ],
+    "highRelevanceHints": [
+      "fractura",
+      "luxacion",
+      "herida profunda",
+      "sangrado activo",
+      "quemadura",
+      "esguince",
+      "desmayo",
+      "vomito persistente",
+      "dolor intenso",
+      "golpe en la cabeza",
+      "cabeza con mareo",
+      "hipotermia",
+      "escalofrios",
+      "escalofrios intensos",
+      "me moje",
+      "mojado por lluvia",
+      "empapado"
+    ],
+    "headacheAlarmSignals": [
+      "dolor de cabeza intenso",
+      "cefalea intensa",
+      "vomito persistente",
+      "convulsion",
+      "desmayo",
+      "no puede hablar",
+      "debilidad de un lado",
+      "vision borrosa",
+      "confusion",
+      "confusión"
+    ],
+    "mildSignals": [
+      "golpe leve",
+      "dolor leve",
+      "moreton leve",
+      "sin sangrado",
+      "sin deformidad",
+      "se puede mover",
+      "rasguno",
+      "rasguño",
+      "dolor de cabeza",
+      "cefalea",
+      "migraña leve"
+    ],
+    "moderateSignals": [
+      "herida profunda",
+      "sangrado activo",
+      "inflamacion importante",
+      "hinchazon marcada",
+      "dolor que no cede",
+      "limitacion funcional",
+      "poco sangrado",
+      "sangrado leve",
+      "golpe mediano",
+      "golpe moderado",
+      "golpe en la cabeza",
+      "escalofrios",
+      "frio intenso",
+      "chichon",
+      "chichón",
+      "mareo tras golpe"
+    ],
+    "urgentSignals": [
+      "fractura expuesta",
+      "quemadura grave",
+      "dolor de pecho",
+      "dificultad para respirar",
+      "deformidad evidente",
+      "no puede mover en absoluto",
+      "hipotermia",
+      "me moje y tengo escalofrios",
+      "escalofrios intensos",
+      "piel muy fria",
+      "temblor incontrolable"
+    ]
+  },
+  "levelSignals": {
+    "CRITICA": [
+      "no respira",
+      "inconsciente",
+      "paro cardiaco",
+      "hemorragia",
+      "sangrado abundante",
+      "convulsion",
+      "asfixia"
+    ],
+    "URGENTE": [
+      "fractura expuesta",
+      "quemadura grave",
+      "dolor de pecho",
+      "dificultad para respirar",
+      "deformidad evidente",
+      "no puede mover en absoluto",
+      "hipotermia",
+      "escalofrios intensos",
+      "piel muy fria",
+      "temblor incontrolable"
+    ],
+    "MODERADA": [
+      "cortada",
+      "herida",
+      "quemadura",
+      "esguince",
+      "fractura",
+      "vomito",
+      "caida",
+      "inflamacion importante",
+      "hinchazon marcada",
+      "dolor que no cede",
+      "limitacion funcional",
+      "poco sangrado",
+      "sangrado leve",
+      "golpe mediano",
+      "golpe en la cabeza"
+    ],
+    "LEVE": [
+      "golpe leve",
+      "dolor leve",
+      "moreton leve",
+      "sin sangrado",
+      "sin deformidad",
+      "se puede mover",
+      "dolor de cabeza",
+      "cefalea"
+    ]
+  },
+  "weights": {
+    "critical": 6,
+    "urgent": 4,
+    "moderate": 3,
+    "mild": -3,
+    "headacheAlarm": 4,
+    "socialPenalty": -4,
+    "protocolMaxBonus": 6,
+    "protocolDivisor": 4,
+    "strongSignalThreshold": 8,
+    "protocolEvidenceThreshold": 12,
+    "moderateOpenThreshold": 8,
+    "urgentOpenThreshold": 6
+  },
+  "normalization": {
+    "replacements": [
+      { "from": ["qmadura", "quemadra", "quemadrua"], "to": "quemadura" },
+      { "from": ["luxasion", "luxasion", "locsacion"], "to": "luxacion" },
+      { "from": ["fratura", "fractrua"], "to": "fractura" },
+      { "from": ["insconsiente", "inconsiente"], "to": "inconsciente" },
+      { "from": ["hemorrajia", "emoragia"], "to": "hemorragia" },
+      { "from": ["desmllo", "desmyo"], "to": "desmayo" },
+      { "from": ["atrgantamiento", "atragntamiento"], "to": "atragantamiento" },
+      { "from": ["calosfrios", "escalofrio", "escalofrío", "escalofrios", "escalofríos"], "to": "escalofrios" },
+      { "from": ["me moje", "me mojé", "mojado", "empapado", "mojado por lluvia"], "to": "exposicion al frio" },
+      { "from": ["calentura con frio", "temblor por frio"], "to": "escalofrios intensos" }
+    ]
+  }
+}

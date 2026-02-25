@@ -1,9 +1,10 @@
 import { auth, db } from '@/config/firebase';
-import { DecisionTree } from '@/data/decisionTrees';
+import { DecisionTree, detectRelevantTree } from '@/data/decisionTrees';
 import { FirstAidProtocol, getProtocolMatches, searchProtocols } from '@/data/firstAidProtocols';
-import { navigateTree, startDecisionTree } from '@/services/decisionTreeEngine';
+import { navigateTree } from '@/services/decisionTreeEngine';
 import { checkGeminiStatus, sendMessageToGemini } from '@/services/geminiService';
-import { analyzeMessageCategory, getEnrichedPrompt } from '@/services/knowledgeBase';
+import { analyzeMessageCategory } from '@/services/knowledgeBase';
+import { cacheResolvedEmergencyCase, findLocalEmergencyMatch } from '@/services/localEmergencyApi';
 import { detectEmergencyLevel, extractStabilizationTime } from '@/services/ollamaService';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -82,8 +83,10 @@ export default function ChatScreen() {
     ];
     const hasCriticalHint = criticalHints.some((hint) => normalizedText.includes(hint));
 
+    if (hasCriticalHint) return true;
+
     const analysis = analyzeMessageCategory(normalizedText);
-    return hasCriticalHint && analysis.confidence >= 0.67;
+    return analysis.confidence >= 0.67;
   };
 
   const extractName = (text: string): string | null => {
@@ -175,38 +178,11 @@ export default function ChatScreen() {
       }
 
       setPatientName(detectedName);
-      setIntakeStep('edad');
-      return `Mucho gusto, **${detectedName}**. ¿Qué **edad** tiene la persona afectada?`;
+      setIntakeStep('completado'); // Saltamos edad y consciente para hacerlo más rápido
+      return `Mucho gusto, **${detectedName}**. ¿En qué te puedo ayudar hoy? Describe la emergencia o tu consulta.`;
     }
 
-    if (intakeStep === 'edad') {
-      const detectedAge = extractAge(userInput);
-      if (!detectedAge) {
-        return 'Gracias. Ahora indícame la **edad en número** (ejemplo: 34).';
-      }
-
-      setPatientAge(detectedAge);
-      setIntakeStep('consciente');
-      return 'Entendido. Último dato: ¿la persona está **consciente**? (sí/no)';
-    }
-
-    if (intakeStep === 'consciente') {
-      const consciousStatus = extractConsciousStatus(userInput);
-      if (consciousStatus === null) {
-        return 'Necesito confirmar si está consciente. Respóndeme solo: **sí** o **no**.';
-      }
-
-      setIsPatientConscious(consciousStatus);
-      setIntakeStep('completado');
-
-      if (!consciousStatus) {
-        return 'Entendido: persona **inconsciente**. Si no lo hiciste, llama al **911** ahora.\n\nAhora dime qué está ocurriendo (ejemplo: "no respira", "sangrado abundante", "convulsión").';
-      }
-
-      return 'Gracias, ya tengo los datos básicos. Ahora descríbeme la **emergencia** para orientarte paso a paso.';
-    }
-
-    return 'Cuéntame qué emergencia presenta la persona para continuar con la orientación.';
+    return null;
   };
 
   useEffect(() => {
@@ -373,46 +349,63 @@ export default function ChatScreen() {
 
     try {
       let respuesta: string;
-      const hasEmergencyKeywords = detectEmergencyKeywords(userInput);
       let forcedProtocol: FirstAidProtocol | null = null;
+      let skipLocalMatching = false;
 
       if (disambiguationState.active && disambiguationState.options.length === 2) {
         const selectedProtocol = resolveDisambiguationSelection(userInput, disambiguationState.options);
 
-        if (!selectedProtocol) {
-          respuesta = 'Para continuar sin confusión, necesito que elijas una opción. Responde **1** o **2**.';
-          const assistantMessage: ChatMessage = {
-            id: (Date.now() + 1).toString(),
-            role: 'assistant',
-            content: respuesta,
-            timestamp: new Date(),
-          };
-
-          setMessages(prev => [...prev, assistantMessage]);
-          guardarMensajeEnFirestore(assistantMessage);
-          return;
+        if (selectedProtocol) {
+          forcedProtocol = selectedProtocol;
+          setDisambiguationState({ active: false, options: [] });
+        } else {
+          // Si no eligió 1 o 2, evitamos que esta misma entrada vuelva a gatillar desambiguación local
+          skipLocalMatching = true;
+          setDisambiguationState({ active: false, options: [] });
         }
-
-        forcedProtocol = selectedProtocol;
-        setDisambiguationState({ active: false, options: [] });
       }
 
-      if (!hasEmergencyKeywords && !inDecisionMode && !forcedProtocol) {
-        respuesta = handleIntakeFlow(userInput) || 'Cuéntame qué emergencia presenta la persona para continuar.';
+      // Solo hacer el intake si aún no ha completado el paso de nombre
+      // EXCEPCIÓN: Si se detecta una emergencia, permitimos que pase directo
+      const isEmergency = detectEmergencyKeywords(userInput);
 
-        const assistantMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: respuesta,
-          timestamp: new Date(),
-        };
-
-        setMessages(prev => [...prev, assistantMessage]);
-        guardarMensajeEnFirestore(assistantMessage);
-        return;
+      // 🌳 DETECTAR SI DEBEMOS ENTRAR EN MODO ÁRBOL DE DECISIÓN
+      if (!inDecisionMode && isEmergency) {
+        const relevantTree = detectRelevantTree(userInput);
+        if (relevantTree) {
+          console.log(`🌳 Árbol detectado: ${relevantTree.id}. Iniciando modo guiado...`);
+          setInDecisionMode(true);
+          setCurrentTree(relevantTree);
+          setCurrentNodeId(relevantTree.startNodeId);
+          // Al activar el modo árbol, reseteamos el intake para no estorbar
+          setIntakeStep('completado');
+        }
       }
 
-      if (!inDecisionMode && !forcedProtocol) {
+      if (intakeStep !== 'completado' && !inDecisionMode && !forcedProtocol) {
+        // Intentar capturar nombre aunque sea emergencia
+        const nameInText = extractName(userInput);
+        if (nameInText) {
+          setPatientName(nameInText);
+          setIntakeStep('completado');
+        } else if (!isEmergency) {
+          // Si no es emergencia y no dio el nombre, preguntar
+          const intakeResponse = handleIntakeFlow(userInput);
+          if (intakeResponse) {
+            const assistantMessage: ChatMessage = {
+              id: (Date.now() + 1).toString(),
+              role: 'assistant',
+              content: intakeResponse,
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, assistantMessage]);
+            guardarMensajeEnFirestore(assistantMessage);
+            return;
+          }
+        }
+      }
+
+      if (!inDecisionMode && !forcedProtocol && !skipLocalMatching) {
         const matches = getProtocolMatches(`${userInput}${buildPatientContext()}`);
         if (matches.length >= 2) {
           const topMatch = matches[0];
@@ -479,57 +472,60 @@ export default function ChatScreen() {
         }
         
       } else {
-        // 🌳 INTENTAR INICIAR ÁRBOL DE DECISIÓN
-        const treeNavigation = await startDecisionTree(userInput);
-        
-        if (treeNavigation) {
-          console.log('🌳 Iniciando árbol de decisión:', treeNavigation.tree.name);
-          
-          // Activar modo árbol
-          setInDecisionMode(true);
-          setCurrentTree(treeNavigation.tree);
-          setCurrentNodeId(treeNavigation.currentNode.id);
-          
-          respuesta = `🌳 **MODO GUIADO ACTIVADO**\n\n`;
-          respuesta += `Te guiaré con preguntas específicas para **${treeNavigation.tree.name}**.\n\n`;
-          respuesta += `---\n\n${treeNavigation.formattedResponse}`;
-          
+        // 🔍 MODO RAG CON LOCAL-FIRST
+        console.log('💬 Buscando respuesta local primero...');
+
+        const triageQuery = `${userInput}${buildPatientContext()}`;
+
+        // 1️⃣ Intentar respuesta local (sin internet) si no venimos de una desambiguación fallida
+        const localMatch = !skipLocalMatching ? await findLocalEmergencyMatch(triageQuery) : null;
+
+        if (localMatch && localMatch.confidence >= 0.55) {
+          console.log(`✅ Respuesta local encontrada [${localMatch.source}] confianza: ${localMatch.confidence.toFixed(2)}`);
           const assistantMessage: ChatMessage = {
             id: (Date.now() + 1).toString(),
             role: 'assistant',
-            content: respuesta,
+            content: localMatch.response,
             timestamp: new Date(),
+            emergencyLevel: localMatch.level,
+            stabilizationTime: localMatch.stabilizationTime || undefined,
           };
 
           setMessages(prev => [...prev, assistantMessage]);
           guardarMensajeEnFirestore(assistantMessage);
-          
-        } else {
-          // 🔍 MODO RAG NORMAL (sin árbol de decisión)
-          console.log('💬 Usando modo RAG estándar');
-          
-          // Analizar categoría del mensaje
-          const analysis = analyzeMessageCategory(userInput);
-          console.log('📊 Análisis de mensaje:', analysis);
 
-          // Obtener prompt enriquecido con RAG
+          if (localMatch.stabilizationTime && localMatch.level !== 'LEVE') {
+            iniciarTimer(localMatch.stabilizationTime, localMatch.level);
+            if (localMatch.level === 'CRÍTICA') {
+              Alert.alert(
+                '🚨 EMERGENCIA CRÍTICA',
+                `Se detectó una emergencia crítica. Temporizador: ${localMatch.stabilizationTime} minutos.\n\n¿Deseas llamar a emergencias ahora?`,
+                [
+                  { text: 'Seguir instrucciones', style: 'cancel' },
+                  { text: 'Llamar 911', onPress: () => llamarEmergencias(), style: 'destructive' }
+                ]
+              );
+            }
+          }
+        } else {
+          // 2️⃣ Fallback: Gemini directo (sin RAG de Firestore para evitar lentitud)
+          console.log('🌐 Sin coincidencia local suficiente, usando Gemini...');
+
           const selectedProtocolHint = forcedProtocol
-            ? `\n\n🎯 PROTOCOLO PRIORIZADO POR DESAMBIGUACIÓN:\n- ${forcedProtocol.title}\n- Nivel base: ${forcedProtocol.level}`
+            ? `\n\n🎯 PROTOCOLO PRIORIZADO:\n- ${forcedProtocol.title}\n- Nivel base: ${forcedProtocol.level}`
             : '';
 
-          const enrichedMessage = await getEnrichedPrompt(`${userInput}${buildPatientContext()}${selectedProtocolHint}`);
-          console.log('✨ Usando RAG para enriquecer contexto');
-
-          // Obtener historial para contexto (últimos 5 mensajes)
           const conversationHistory = messages.slice(-5).map(msg => ({
             role: msg.role,
             content: msg.content,
           }));
 
-          // Enviar mensaje enriquecido al chatbot (Gemini con fallback local)
-          respuesta = await sendMessageToGemini(enrichedMessage, conversationHistory);
+          // Enviar directo: geminiService ya hace su propia búsqueda local de protocolos
+          respuesta = await sendMessageToGemini(
+            `${userInput}${buildPatientContext()}${selectedProtocolHint}`,
+            conversationHistory
+          );
 
-          // Detectar nivel de emergencia y tiempo
           const emergencyLevel = detectEmergencyLevel(respuesta);
           const stabilizationTime = extractStabilizationTime(respuesta);
 
@@ -545,11 +541,12 @@ export default function ChatScreen() {
           setMessages(prev => [...prev, assistantMessage]);
           guardarMensajeEnFirestore(assistantMessage);
 
-          // Iniciar temporizador si hay tiempo de estabilización
+          // Cachear la respuesta de Gemini para uso futuro sin internet
           if (emergencyLevel && stabilizationTime) {
+            cacheResolvedEmergencyCase(userInput, emergencyLevel, stabilizationTime, respuesta).catch(() => null);
+
             iniciarTimer(stabilizationTime, emergencyLevel);
-            
-            // Alerta inmediata para emergencias críticas
+
             if (emergencyLevel === 'CRÍTICA') {
               Alert.alert(
                 '🚨 EMERGENCIA CRÍTICA',
@@ -771,7 +768,7 @@ export default function ChatScreen() {
         {isLoading && (
           <View style={[styles.messageBubble, styles.assistantBubble, styles.loadingBubble]}>
             <ActivityIndicator size="small" color="#007AFF" />
-            <Text style={styles.loadingText}>DeepSeek está pensando...</Text>
+            <Text style={styles.loadingText}>La IA está procesando...</Text>
           </View>
         )}
       </ScrollView>

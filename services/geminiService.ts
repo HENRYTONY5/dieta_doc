@@ -1,6 +1,6 @@
 // Servicio para comunicarse con Google Gemini (API gratuita con internet)
 
-import { FirstAidProtocol, searchProtocols } from '@/data/firstAidProtocols';
+import { FirstAidProtocol, getProtocolMatches, searchProtocols } from '@/data/firstAidProtocols';
 
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim() || '';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
@@ -11,16 +11,38 @@ export interface Message {
 }
 
 function buildLocalFallbackResponse(message: string): string {
-  const protocol = searchProtocols(message)[0];
+  const protocolMatches = getProtocolMatches(message);
+  const protocol = protocolMatches.length > 0 ? protocolMatches[0].protocol : null;
+  
+  // Detectar nivel de emergencia mucho más robusto para el fallback
+  let detectedLevel: 'CRÍTICA' | 'URGENTE' | 'MODERADA' | 'LEVE' = 'MODERADA';
+  const msg = message.toLowerCase();
+
+  // Prioridad 1: Si hay un protocolo, usar su nivel
+  if (protocol) {
+    detectedLevel = protocol.level;
+  } else {
+    // Prioridad 2: Keywords críticas
+    const criticalWords = ['no respira', 'inconsciente', 'paro', 'muerto', 'asfixia', 'ahoga', 'convulsion', 'convulsión'];
+    const urgentWords = ['sangre', 'sangrado', 'quemadura', 'fractura', 'roto', 'hueso', 'dolor fuerte', 'pecho'];
+
+    if (criticalWords.some(w => msg.includes(w))) {
+      detectedLevel = 'CRÍTICA';
+    } else if (urgentWords.some(w => msg.includes(w))) {
+      detectedLevel = 'URGENTE';
+    }
+  }
+
+  const stabilizationTime = protocol ? protocol.stabilizationTime : (detectedLevel === 'CRÍTICA' ? 0 : 10);
 
   if (!protocol) {
-    return `[NIVEL: MODERADA]\n[TIEMPO DE ESTABILIZACIÓN: 10 minutos]\n\n**Te acompaño paso a paso.**\nCon lo que me dices, haré una orientación inicial mientras confirmamos datos clave.\n\n**ORIENTACIÓN INMEDIATA:**\n1. **Mantén la calma** y verifica si la persona respira y responde.\n2. Colócala en un lugar seguro, lejos del riesgo.\n3. Si hay sangrado, presiona con tela limpia de forma continua.\n\n**Para orientarte mejor, respóndeme esto:**\n1. ¿Qué síntoma es el más grave ahora mismo?\n2. ¿Desde cuándo comenzó y si está empeorando?\n\n**⚠️ CUÁNDO LLAMAR A EMERGENCIAS:**\n- Pérdida de conciencia\n- Dificultad respiratoria\n- Sangrado abundante\n\n**SIGUIENTE PASO:**\nRespóndeme esas 2 preguntas y te doy la siguiente acción exacta.`;
+    return `[NIVEL: ${detectedLevel}]\n[TIEMPO DE ESTABILIZACIÓN: ${stabilizationTime} minutos]\n\n**⚠️ ATENCIÓN: Modo sin conexión (Gemini no configurado).**\n\n**ORIENTACIÓN INMEDIATA:**\n1. **Mantén la calma** y asegura el área.\n2. Verifica si la persona responde y respira.\n3. Si hay peligro inmediato o inconsciencia, llama al 911.\n\n**Por favor, describe con más detalle:**\n- ¿Qué sucedió exactamente?\n- ¿Hay sangrado o dificultad para respirar?\n\n**SIGUIENTE PASO:**\nDame más datos para intentar localizar un protocolo local de ayuda.`;
   }
 
   const steps = protocol.steps.slice(0, 5).map((step, index) => `${index + 1}. ${step}`).join('\n');
   const call911 = protocol.whenToCall911.slice(0, 4).map(item => `- ${item}`).join('\n');
 
-  return `[NIVEL: ${protocol.level}]\n[TIEMPO DE ESTABILIZACIÓN: ${protocol.stabilizationTime} minutos]\n\n**Te acompaño paso a paso.**\nSegún tu descripción, el protocolo más cercano es **${protocol.title}**.\n\n**ORIENTACIÓN INMEDIATA:**\n${steps}\n\n**Para orientarte mejor, respóndeme esto:**\n1. ¿La persona puede hablar y respirar sin dificultad?\n2. ¿El síntoma principal está mejorando o empeorando?\n\n**⚠️ CUÁNDO LLAMAR A EMERGENCIAS:**\n${call911}\n\n**SIGUIENTE PASO:**\nCuando me respondas esas 2 preguntas, te doy la siguiente acción específica.`;
+  return `[NIVEL: ${protocol.level}]\n[TIEMPO DE ESTABILIZACIÓN: ${protocol.stabilizationTime} minutos]\n\n**⚠️ ATENCIÓN: Modo sin conexión.**\n\nHe localizado el protocolo local de **${protocol.title}** para ayudarte:\n\n**ORIENTACIÓN INMEDIATA:**\n${steps}\n\n**⚠️ CUÁNDO LLAMAR AL 911:**\n${call911}\n\n**SIGUIENTE PASO:**\nConfirma si ya aplicaste la presión/hielo o si la situación empeora.`;
 }
 
 /**
@@ -87,16 +109,18 @@ export async function sendMessageToGemini(
 2. Usa formato Markdown: **negritas** para pasos importantes
 3. SIEMPRE clasifica la emergencia al inicio
 4. Da instrucciones NUMERADAS y MUY CLARAS
-  5. Mantén FLUJO DE CONVERSACIÓN por turnos (no monólogo)
-  6. Haz máximo 2 preguntas por turno para no saturar
-  7. En cada respuesta incluye una acción inmediata segura + una pregunta de seguimiento
+5. Mantén FLUJO DE CONVERSACIÓN por turnos (no monólogo)
+6. Haz máximo 1 o 2 preguntas por turno para no saturar
+7. ESCUCHA ACTIVAMENTE: Analiza cuidadosamente el mensaje del usuario. Si el usuario te dice que ya hizo algo o responde a tu pregunta, RECONOCE su respuesta antes de dar el siguiente paso (ej: "Entiendo que ya le pusiste hielo, muy bien. Ahora...").
+8. SÉ EMPÁTICO: Usa un tono calmado y de apoyo (ej: "Tranquilo, estoy aquí para guiarte", "Entiendo que duela, vamos a manejarlo juntos").
+9. ADAPTABILIDAD: Si el usuario describe una situación que no está en los protocolos cargados, usa tu conocimiento médico general para dar la mejor recomendación de primeros auxilios posible, manteniendo siempre el formato estricto.
 
-  🗣 ESTILO CONVERSACIONAL OBLIGATORIO:
-  - Inicia con una frase breve de acompañamiento (ej: "Te ayudo paso a paso")
-  - Luego orienta con 3-5 pasos concretos y accionables
-  - Después pregunta solo lo esencial (1-2 preguntas)
-  - Cierra con "SIGUIENTE PASO" para guiar el siguiente turno
-  - Si el usuario ya respondió algo, NO repitas preguntas previas innecesarias
+🗣 ESTILO CONVERSACIONAL OBLIGATORIO:
+- Inicia SIEMPRE validando lo que el usuario acaba de decir y mostrando empatía.
+- Luego orienta con 2-3 pasos concretos y accionables, basados en lo que el usuario acaba de describir.
+- Después haz una pregunta suave para saber cómo sigue o para obtener información vital que falte.
+- Cierra con "SIGUIENTE PASO" para guiar el siguiente turno.
+- NUNCA repitas preguntas que el usuario ya respondió.
 
 🚨 CLASIFICACIÓN DE EMERGENCIAS:
 - **CRÍTICA**: No respira, inconsciente, sangrado abundante, paro cardíaco
@@ -111,13 +135,15 @@ export async function sendMessageToGemini(
 [NIVEL: CRÍTICA/URGENTE/MODERADA/LEVE]
 [TIEMPO DE ESTABILIZACIÓN: X minutos]
 
-**¿Qué pasó exactamente?**
-(Haz 1-2 preguntas específicas sobre la situación)
+**Te escucho:**
+(Inicia con una frase empática y tranquilizadora, reconociendo lo que el usuario acaba de decir o sentir. Ej: "Entiendo que te duela mucho, vamos a tratar de calmarlo juntos.")
 
 **ORIENTACIÓN INMEDIATA:**
 1. [Paso claro con **negritas** en lo importante]
 2. [Siguiente paso]
-3. [etc.]
+
+**¿Cómo te sientes ahora?**
+(Haz 1 pregunta suave y específica sobre la evolución o para obtener el dato que falta)
 
 **SIGUIENTE PASO:**
 [Indica exactamente qué debe responder o hacer ahora el usuario]
@@ -125,16 +151,13 @@ export async function sendMessageToGemini(
 **⚠️ CUÁNDO LLAMAR A EMERGENCIAS:**
 - [Condiciones específicas para esta emergencia]
 
-**📌 NOTA IMPORTANTE:**
-[Consejo final de seguridad]
-
 ✅ SIEMPRE:
 - Responde en español puro
 - Usa markdown para formato (**negritas**, listas)
-- Sé claro, directo y profesional
+- Sé MUY EMPÁTICO, TRANQUILIZADOR y ESCUCHA ACTIVAMENTE
 - Mantén conversación guiada en varios turnos
-- Basa tus respuestas en los protocolos proporcionados
-- Si hay CUALQUIER duda sobre gravedad: recomienda 911`;
+- Basa tus respuestas en los protocolos proporcionados, pero si no hay uno exacto, usa tu conocimiento médico general para dar la mejor recomendación.
+- Recomienda 911 SOLO si hay señales de alarma claras o empeoramiento clínico evidente`;
 
     // Construir el prompt completo con historial
     let fullPrompt = systemPrompt + '\n\n';

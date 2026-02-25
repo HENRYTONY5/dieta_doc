@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "webConsultations": [],
+  "cases": [
+    {
+      "id": "cefalea-leve",
+      "level": "LEVE",
+      "stabilizationTime": 20,
+      "patterns": ["dolor de cabeza", "cefalea", "migraña leve"],
+      "alarmExclusions": ["convulsion", "desmayo", "inconsciente", "dificultad para respirar", "debilidad de un lado", "no puede hablar", "vomito persistente"],
+      "response": "[NIVEL: LEVE]\n[TIEMPO DE ESTABILIZACIÓN: 20 minutos]\n\n**Orientación básica inicial.**\n1. Descansa en un lugar tranquilo e hidrátate.\n2. Evita pantallas/luz intensa por 20-30 minutos.\n3. Reevalúa si mejora, sigue igual o empeora.\n\n**⚠️ Escalar a urgencias si aparecen señales de alarma neurológica.**"
+    },
+    {
+      "id": "golpe-leve",
+      "level": "LEVE",
+      "stabilizationTime": 20,
+      "patterns": ["golpe leve", "moreton leve", "dolor leve", "sin sangrado", "se puede mover"],
+      "alarmExclusions": ["deformidad", "no puede mover", "sangrado abundante", "inconsciente"],
+      "response": "[NIVEL: LEVE]\n[TIEMPO DE ESTABILIZACIÓN: 20 minutos]\n\n**Emergencia sencilla.**\n1. Hielo envuelto 15-20 minutos.\n2. Reposo relativo y elevación si hay inflamación.\n3. Vigila dolor y movilidad.\n\n**⚠️ Escalar si empeora o aparece deformidad/sangrado importante.**"
+    },
+    {
+      "id": "sangrado-leve-moderado",
+      "level": "MODERADA",
+      "stabilizationTime": 15,
+      "patterns": ["poco sangrado", "sangrado leve", "cortada", "herida"],
+      "alarmExclusions": ["sangrado abundante", "chorros", "hemorragia"],
+      "response": "[NIVEL: MODERADA]\n[TIEMPO DE ESTABILIZACIÓN: 15 minutos]\n\n**Control local del sangrado.**\n1. Presión directa continua con gasa/tela limpia.\n2. Eleva la zona si es posible.\n3. Si no cede en 10-15 min, escalar atención médica.\n\n**⚠️ Llama emergencias si hay sangrado abundante o deterioro.**"
+    },
+    {
+      "id": "golpe-cabeza-moderado",
+      "level": "MODERADA",
+      "stabilizationTime": 20,
+      "patterns": ["golpe en la cabeza", "chichon", "mareo tras golpe", "golpe mediano"],
+      "alarmExclusions": ["perdida de conciencia", "convulsion", "vomito persistente", "confusion severa"],
+      "response": "[NIVEL: MODERADA]\n[TIEMPO DE ESTABILIZACIÓN: 20 minutos]\n\n**Observación activa del trauma leve-moderado.**\n1. Reposo y vigilancia neurológica básica.\n2. Hielo local 15-20 minutos.\n3. Reevaluar dolor, mareo y estado mental cada 10-15 min.\n\n**⚠️ Escala urgente si aparecen vómitos persistentes, desmayo o confusión marcada.**"
+    },
+    {
+      "id": "inconsciente-no-respira",
+      "level": "CRÍTICA",
+      "stabilizationTime": 0,
+      "patterns": ["inconsciente", "no respira", "paro cardiaco"],
+      "alarmExclusions": [],
+      "response": "[NIVEL: CRÍTICA]\n[TIEMPO DE ESTABILIZACIÓN: 0 minutos]\n\n**Acción inmediata.**\n1. Llamar a emergencias ahora.\n2. Iniciar RCP si corresponde.\n3. Mantener monitorización continua hasta llegada de ayuda."
+    }
+  ]
+}
